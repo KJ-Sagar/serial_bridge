@@ -46,13 +46,60 @@
     static char uart_rx_fifo[RX_FIFO_SIZE];
     static int uart_rx_len = 0;
 
+    bool read_ipd_stream(char* ipd_buffer, size_t ipd_len) {
+        // Fetch all data from UART Buffer
+        while (uart_is_readable(UART_ID) && uart_rx_len < RX_FIFO_SIZE) {
+            uart_rx_fifo[uart_rx_len++] = uart_getc(UART_ID);
+        }
+
+        // Look for +IPD prefix
+        for (int i = 0; i <= uart_rx_len - 5; i++) {
+            if (strncmp(&uart_rx_fifo[i], "+IPD,", 5) == 0) {
+                int j = i + 5;
+                // parse connection id
+                int conn_id = uart_rx_fifo[j] - '0';
+                j++;
+
+                if (uart_rx_fifo[j] != ',') return false;
+                j++;
+
+                // parse packet length
+                int packet_len = 0;
+                while (uart_rx_fifo[j] >= '0' && uart_rx_fifo[j] <= '9') {
+                    packet_len = packet_len * 10 + (uart_rx_fifo[j] - '0');
+                    j++;
+                }
+
+                if (uart_rx_fifo[j] != ':') return false;
+                j++;
+
+                // check if full packet is received
+                if (j + packet_len > uart_rx_len) return false;
+
+                // copy packet
+                size_t copy_len = (packet_len >= ipd_len) ? ipd_len - 1 : packet_len;
+                memcpy(ipd_buffer, &uart_rx_fifo[j], copy_len);
+                ipd_buffer[copy_len] = '\0';
+
+                // remove processed bytes
+                int remaining = uart_rx_len - (j + packet_len);
+                memmove(uart_rx_fifo, &uart_rx_fifo[j + packet_len], remaining);
+                uart_rx_len = remaining;
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     void clear_uart_buffer() {
         while (uart_is_readable(UART_ID)) {
             uart_getc(UART_ID);
         }
     }
 
-    bool send_at_command(char* command, int timeout) {
+    bool at_send_command(char* command, int timeout) {
         // Send command
         clear_uart_buffer();
         uart_puts(uart0, command);
@@ -86,56 +133,52 @@
         gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
 
         // Health check
-        if (!send_at_command("AT\r\n", 1000)) return false;
+        if (!at_send_command("AT\r\n", 1000)) return false;
 
         // Disable echo
-        if (!send_at_command("ATE0\r\n", 1000)) return false;
+        if (!at_send_command("ATE0\r\n", 1000)) return false;
 
         return true;
     }
 
     bool connect_wifi(char* wifi_ssid, char* wifi_password) {
         // Setup as station
-        if (!send_at_command("AT+CWMODE=1\r\n", 1000)) return false;
+        if (!at_send_command("AT+CWMODE=1\r\n", 1000)) return false;
 
         // Connect to WiFi
         char command[100];
         sprintf(command, "AT+CWJAP=\"%s\",\"%s\"\r\n", wifi_ssid, wifi_password);
-        if (!send_at_command(command, 20000)) return false;
+        if (!at_send_command(command, 20000)) return false;
 
         return true;
     }
 
     bool disconnect_wifi() {
-        if (!send_at_command("AT+CWQAP\r\n", 20000)) return false;
+        if (!at_send_command("AT+CWQAP\r\n", 20000)) return false;
 
         return true;
     }
 
     bool start_tcp_server(int port) {
         // Allow multiple connections
-        if (!send_at_command("AT+CIPMUX=1\r\n", 1000)) return false;
+        if (!at_send_command("AT+CIPMUX=1\r\n", 1000)) return false;
 
         // Start TCP server
         char command[100];
         sprintf(command, "AT+CIPSERVER=1,%d\r\n", port);
-        if (!send_at_command(command, 1000)) return false;
+        if (!at_send_command(command, 1000)) return false;
 
         return true;
     }
 
     bool stop_tcp_server() {
         // Stop TCP server and close all connections
-        if (!send_at_command("AT+CIPSERVER=0,1\r\n", 1000)) return false;
+        if (!at_send_command("AT+CIPSERVER=0,1\r\n", 1000)) return false;
         
         // Disable multiple connections
-        if (!send_at_command("AT+CIPMUX=0\r\n", 1000)) return false;
+        if (!at_send_command("AT+CIPMUX=0\r\n", 1000)) return false;
 
         return true;
-    }
-
-    bool send_message() {
-        
     }
 
 
